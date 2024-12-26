@@ -2,7 +2,7 @@
 name = "textmeld"
 version = "0.1.0"
 description = "A tool to combine multiple text files into one for LLM training and prompts"
-authors = ["hamhamtarotottoko@gmail.com"]
+authors = ["Hamham Taro <hamhamtarotottoko@gmail.com>"]
 readme = "README.md"
 packages = [{include = "textmeld"}] 
 
