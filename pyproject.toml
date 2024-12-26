@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "textmeld"
+version = "0.1.0"
+description = ""
+authors = ["hamhamtarotottoko@gmail.com"]
+readme = "README.md"
+packages = [{include = "textmeld"}] 
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.4"
+pytest = "^8.3.4"
+
+[tool.poetry.scripts]
+textmeld = "textmeld:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
