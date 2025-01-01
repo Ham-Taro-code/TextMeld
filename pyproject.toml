@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "textmeld"
-version = "0.1.0"
+version = "0.2.0"
 description = "A tool to combine multiple text files into one for LLM training and prompts"
 authors = ["Hamham Taro <hamhamtarotottoko@gmail.com>"]
 readme = "README.md"
