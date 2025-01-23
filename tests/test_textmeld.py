@@ -38,13 +38,13 @@ def test_textmeld_initialization():
     """TextMeldの初期化テスト"""
     # デフォルトの除外パターン
     meld = TextMeld()
-    assert ".git/" in meld.exclude_patterns
+    assert ".git" in meld.exclude_patterns
     
     # カスタムの除外パターン
     custom_patterns = ["*.log", "tmp/"]
     meld = TextMeld(exclude_patterns=custom_patterns)
     assert all(pattern in meld.exclude_patterns for pattern in custom_patterns)
-    assert ".git/" in meld.exclude_patterns
+    assert ".git" in meld.exclude_patterns
 
 def test_load_gitignore(temp_directory):
     """gitignoreファイルの読み込みテスト"""

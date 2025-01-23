@@ -1,0 +1,688 @@
+Directory Structure:
+====================
+├── .github/
+│   └── workflows/
+│       └── python_publish.yml
+├── README.md
+├── log.txt
+├── poetry.lock
+├── pyproject.toml
+├── tests/
+│   └── test_textmeld.py
+└── textmeld/
+    ├── __init__.py
+    ├── cli.py
+    └── textmeld.py
+
+Merged Content:
+====================
+
+==========
+File: pyproject.toml
+==========
+[tool.poetry]
+name = "textmeld"
+version = "0.2.0"
+description = "A tool to combine multiple text files into one for LLM training and prompts"
+authors = ["Hamham Taro <hamhamtarotottoko@gmail.com>"]
+readme = "README.md"
+packages = [{include = "textmeld"}] 
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.4"
+pytest = "^8.3.4"
+
+[tool.poetry.scripts]
+textmeld = "textmeld:main"
+
+[tool.poetry-dynamic-versioning]
+enable = true
+format = "{base}"
+
+[build-system]
+requires = ["poetry-core", "poetry-dynamic-versioning"]
+build-backend = "poetry_dynamic_versioning.backend"
+
+
+
+==========
+File: test_textmeld.py
+==========
+import pytest
+import os
+import tempfile
+import fnmatch
+import shutil
+from pathlib import Path
+from textmeld.textmeld import TextMeld
+
+@pytest.fixture
+def temp_directory():
+    """テスト用の一時ディレクトリを作成"""
+    temp_dir = tempfile.mkdtemp()
+    yield temp_dir
+    shutil.rmtree(temp_dir)
+
+@pytest.fixture
+def sample_directory(temp_directory):
+    """サンプルファイル構造を持つテストディレクトリを作成"""
+    # ディレクトリ構造を作成
+    src_dir = Path(temp_directory) / "src"
+    src_dir.mkdir()
+    
+    # ファイルを作成
+    (src_dir / "main.py").write_text("print('Hello')\n")
+    (src_dir / "test.py").write_text("def test_func():\n    pass\n")
+    
+    # サブディレクトリとファイルを作成
+    sub_dir = src_dir / "utils"
+    sub_dir.mkdir()
+    (sub_dir / "helper.py").write_text("def helper():\n    return True\n")
+    
+    # .gitignoreファイルを作成
+    (src_dir / ".gitignore").write_text("*.pyc\n__pycache__/\n")
+    
+    return str(src_dir)
+
+def test_textmeld_initialization():
+    """TextMeldの初期化テスト"""
+    # デフォルトの除外パターン
+    meld = TextMeld()
+    assert ".git/" in meld.exclude_patterns
+    
+    # カスタムの除外パターン
+    custom_patterns = ["*.log", "tmp/"]
+    meld = TextMeld(exclude_patterns=custom_patterns)
+    assert all(pattern in meld.exclude_patterns for pattern in custom_patterns)
+    assert ".git/" in meld.exclude_patterns
+
+def test_load_gitignore(temp_directory):
+    """gitignoreファイルの読み込みテスト"""
+    # .gitignoreファイルを作成
+    gitignore_content = "*.pyc\n# コメント\n\n__pycache__/\n"
+    gitignore_path = Path(temp_directory) / ".gitignore"
+    gitignore_path.write_text(gitignore_content)
+    
+    meld = TextMeld()
+    meld.load_gitignore(temp_directory)
+    
+    assert "*.pyc" in meld.exclude_patterns
+    assert "__pycache__/" in meld.exclude_patterns
+    assert "# コメント" not in meld.exclude_patterns
+
+def test_should_exclude_from_content():
+    """ファイル除外判定のテスト"""
+    meld = TextMeld(exclude_patterns=["*.log", "tmp/"])
+    
+    assert meld.should_exclude_from_content("error.log")
+    assert meld.should_exclude_from_content("tmp/")
+    assert not meld.should_exclude_from_content("main.py")
+    assert not meld.should_exclude_from_content("logs/data.txt")
+
+def test_generate_tree(sample_directory):
+    """ディレクトリツリー生成のテスト"""
+    meld = TextMeld()
+    tree = meld.generate_tree(sample_directory)
+    
+    # 必要なファイルとディレクトリが含まれているか確認
+    assert "main.py" in tree
+    assert "test.py" in tree
+    assert "utils/" in tree
+    assert "helper.py" in tree
+    
+    # 除外されるべきファイルが含まれていないか確認
+    assert "__pycache__" not in tree
+    assert ".pyc" not in tree
+
+def test_merge_files(sample_directory):
+    """ファイル統合のテスト"""
+    meld = TextMeld([".gitignore"])
+    merged = meld.merge_files(sample_directory)
+    
+    # 各ファイルの内容が含まれているか確認
+    assert "File: main.py" in merged
+    assert "print('Hello')" in merged
+    assert "File: test.py" in merged
+    assert "def test_func():" in merged
+    assert "File: helper.py" in merged
+    assert "def helper():" in merged
+    
+    # 除外されるべきファイルが含まれていないか確認
+    assert ".pyc" not in merged
+    assert "__pycache__" not in merged
+
+def test_process_directory(sample_directory):
+    """ディレクトリ処理の総合テスト"""
+    meld = TextMeld()
+    result = meld.process_directory(sample_directory)
+    
+    # ディレクトリ構造セクションの確認
+    assert "Directory Structure:" in result
+    assert "=" * 20 in result
+    
+    # マージされた内容セクションの確認
+    assert "Merged Content:" in result
+    assert "File: main.py" in result
+    assert "File: test.py" in result
+    assert "File: helper.py" in result
+
+@pytest.mark.parametrize("exclude_patterns,expected_files", [
+    (["*.py"], []),  # 全てのPythonファイルを除外
+    (["test*"], ["main.py", "helper.py"]),  # testで始まるファイルを除外
+    (["utils/"], ["main.py", "test.py"]),  # utilsディレクトリを除外
+])
+def test_exclusion_patterns(sample_directory, exclude_patterns, expected_files):
+    """様々な除外パターンのテスト"""
+    meld = TextMeld(exclude_patterns=exclude_patterns)
+    result = meld.process_directory(sample_directory)
+    
+    # 期待されるファイルが含まれ、除外されるべきファイルが含まれていないことを確認
+    for file in expected_files:
+        assert f"File: {file}" in result
+    
+    # 除外されるべきファイルが含まれていないことを確認
+    excluded_files = set(["main.py", "test.py", "helper.py"]) - set(expected_files)
+    for file in excluded_files:
+        if any(fnmatch.fnmatch(file, pattern) for pattern in exclude_patterns):
+            assert f"File: {file}" not in result
+
+def test_exclude_gitignores_dir_structure():
+    """gitignoreで除外されるファイルがディレクトリ構造に含まれないことを確認"""
+    # テスト用のディレクトリ構造を作成
+    temp_dir = tempfile.mkdtemp()
+    src_dir = Path(temp_dir) / "src"
+    src_dir.mkdir()
+    (src_dir / "main.py").write_text("print('Hello')\n")
+    (src_dir / "test.py").write_text("def test_func():\n    pass\n")
+    (src_dir / ".gitignore").write_text("*.py\n")
+    
+    meld = TextMeld()
+    result = meld.process_directory(str(src_dir))
+    
+    # .gitignoreで除外されるべきファイルがディレクトリ構造に含まれていないことを確認
+    assert "main.py" not in result
+    assert "test.py" not in result
+    assert ".gitignore" in result
+
+
+==========
+File: __init__.py
+==========
+"""
+TextMeld - A tool to combine multiple text files into one for LLM training and prompts
+"""
+
+from .textmeld import TextMeld
+from .cli import main
+
+__version__ = "0.1.0"
+__all__ = ["TextMeld", "main"]
+
+
+==========
+File: cli.py
+==========
+import argparse
+import sys
+from typing import List, Optional
+from textmeld.textmeld import TextMeld
+
+def parse_args() -> argparse.Namespace:
+    """コマンドライン引数をパース"""
+    parser = argparse.ArgumentParser(
+        description="A tool to merge multiple text files into one file"
+    )
+    parser.add_argument(
+        "directory",
+        help="Path to the directory to be processed"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        help="Path to the output file (if not specified, output to stdout)",
+        default=None
+    )
+    parser.add_argument(
+        "-e", "--exclude",
+        help="File patterns to exclude (can specify multiple)",
+        action="append",
+        default=None
+    )
+    return parser.parse_args()
+
+def main() -> int:
+    """メイン関数"""
+    try:
+        args = parse_args()
+        
+        # TextMeldインスタンスの作成
+        meld = TextMeld(exclude_patterns=args.exclude)
+        
+        # ディレクトリの処理
+        result = meld.process_directory(args.directory)
+        
+        # 結果の出力
+        if args.output:
+            # ファイルに出力
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(result)
+            print(f"Result has been output to {args.output}.", file=sys.stderr)
+        else:
+            # 標準出力に出力
+            print(result)
+        
+        return 0
+    
+    except KeyboardInterrupt:
+        print("\nProcess was interrupted.", file=sys.stderr)
+        return 130
+    except Exception as e:
+        print(f"An error occurred: {e}", file=sys.stderr)
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+==========
+File: textmeld.py
+==========
+import os
+from pathlib import Path
+import typing as typ
+import fnmatch
+
+
+def _is_text_file(file_path: str) -> bool:
+    """ファイルがテキストファイルかどうかを判定"""
+    try:
+        with open(file_path, 'rb') as f:
+            raw = f.read(1024)
+        return True
+    except Exception:
+        return False
+
+
+
+class TextMeld:
+    def __init__(
+        self,
+        exclude_patterns: typ.Optional[list[str]] = None
+    ):
+        default_ignore_patterns = [".git/", "__pycache__/"]
+        self.exclude_patterns = exclude_patterns or []
+        self.exclude_patterns.extend(default_ignore_patterns)
+
+    def load_gitignore(self, directory: str) -> None:
+        """.gitignoreファイルから除外パターンを読み込む"""
+        gitignore_path = os.path.join(directory, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            return
+        
+        with open(gitignore_path, 'r', encoding='utf-8') as f:
+            ignore_pattern = f.read().splitlines()
+            ignore_pattern = [p for p in ignore_pattern if p.strip() and not p.strip().startswith("#")]
+            self.exclude_patterns.extend(ignore_pattern)
+
+    def should_exclude_from_content(self, file_path: str) -> bool:
+        """ファイルが除外パターンに一致するかチェック"""
+        return any(fnmatch.fnmatch(file_path, pattern) for pattern in self.exclude_patterns)
+
+    def generate_tree(self, directory: str, prefix: str = "") -> str:
+        """ディレクトリツリーを生成（全てのファイルを表示）"""
+
+        self.load_gitignore(directory)
+        return self._generate_tree(directory, prefix)
+    
+    
+    def _generate_tree(self, directory: str, prefix: str = "") -> str:
+   
+        tree = ""
+        items = sorted(os.listdir(directory))
+        
+        for i, item in enumerate(items):
+            is_last = i == len(items) - 1
+            current_prefix = prefix + ("└── " if is_last else "├── ")
+            next_prefix = prefix + ("    " if is_last else "│   ")
+            
+            full_path = os.path.join(directory, item)
+            # If item is directory, item is appended with '/'
+            if os.path.isdir(full_path):
+                item += "/"
+
+            # check if file should be excluded
+            if self.should_exclude_from_content(item):
+                continue
+            tree += current_prefix + item + "\n"
+            
+            if os.path.isdir(full_path):
+                tree += self._generate_tree(full_path, next_prefix)
+        
+        return tree
+
+    def merge_files(self, directory: str) -> str:
+        """ファイルの内容を統合（除外パターンに一致するファイルは除く）"""
+        self.load_gitignore(directory)
+        return self._merge_files(directory)
+
+    def _merge_files(self, directory: str) -> str:
+        merged_content = ""
+
+        for item in os.listdir(directory):
+            full_path = os.path.join(directory, item)
+            if os.path.isdir(full_path):
+                if not self.should_exclude_from_content(item + "/"):
+                    merged_content += self._merge_files(full_path)
+                continue
+            if self.should_exclude_from_content(item):
+                continue
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    merged_content += f"\n{'='*10}\n"
+                    merged_content += f"File: {item}\n"
+                    merged_content += f"{'='*10}\n"
+                    merged_content += content + "\n"
+            except Exception as e:
+                pass
+        
+        return merged_content
+
+    def process_directory(self, directory: str) -> str:
+        """ディレクトリを処理し、ツリーとマージされた内容を出力"""
+        # ツリー構造を生成
+        tree = self.generate_tree(directory)
+        
+        # ファイル内容を統合
+        merged_content = self.merge_files(directory)
+
+        output_str = "Directory Structure:\n"
+        output_str += "="*20 + "\n"
+        output_str += tree
+        output_str += "\nMerged Content:\n"
+        output_str += "="*20 + "\n"
+        output_str += merged_content
+
+        return output_str
+
+
+
+
+==========
+File: README.md
+==========
+# TextMeld
+
+A CLI tool that combines multiple text files into one, making it perfect for LLM training data preparation and prompt engineering.
+
+## Installation
+
+```bash
+pip install textmeld
+```
+
+## Usage
+
+```bash
+# Basic usage
+textmeld /path/to/your/directory
+
+# Set maximum directory depth
+textmeld /path/to/your/directory --max-depth 3
+```
+
+The tool will:
+1. Respect .gitignore patterns if present
+2. Include README.md content if available
+3. Combine all text files into a single output
+4. Skip binary and hidden files automatically
+
+## Supported File Types
+
+- Markdown (.md)
+- Text (.txt)
+- YAML (.yaml, .yml)
+- JSON (.json)
+- Python (.py)
+- JavaScript (.js)
+- TypeScript (.ts)
+- JSX/TSX (.jsx, .tsx)
+- HTML (.html)
+- CSS (.css)
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+==========
+File: log.txt
+==========
+
+
+==========
+File: python_publish.yml
+==========
+# This workflow will upload a Python Package using Twine when a release is created
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+name: Upload Python Package
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install poetry
+        run: pipx install poetry
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'poetry'
+      - name: poetry self add "poetry-dynamic-versioning[plugin]"
+        shell: bash
+        run:  |
+          set -eux
+          poetry self add "poetry-dynamic-versioning[plugin]"
+      - name: Install
+        shell: bash
+        run: |
+          poetry install
+      - name: Publish Dry Run
+        if: ${{github.event_name != 'release'}}
+        shell: bash
+        run: |
+          set -eux
+          poetry publish --build --dry-run 
+      - name: Publish
+        if: ${{github.event_name == 'release'}}
+        shell: bash
+        env:
+          POETRY_PYPI_TOKEN_PYPI: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -eux
+          poetry publish --build
+
+
+==========
+File: poetry.lock
+==========
+# This file is automatically @generated by Poetry 1.7.1 and should not be changed by hand.
+
+[[package]]
+name = "colorama"
+version = "0.4.6"
+description = "Cross-platform colored terminal text."
+optional = false
+python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,>=2.7"
+files = [
+    {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
+    {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
+]
+
+[[package]]
+name = "exceptiongroup"
+version = "1.2.2"
+description = "Backport of PEP 654 (exception groups)"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "exceptiongroup-1.2.2-py3-none-any.whl", hash = "sha256:3111b9d131c238bec2f8f516e123e14ba243563fb135d3fe885990585aa7795b"},
+    {file = "exceptiongroup-1.2.2.tar.gz", hash = "sha256:47c2edf7c6738fafb49fd34290706d1a1a2f4d1c6df275526b62cbb4aa5393cc"},
+]
+
+[package.extras]
+test = ["pytest (>=6)"]
+
+[[package]]
+name = "iniconfig"
+version = "2.0.0"
+description = "brain-dead simple config-ini parsing"
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"},
+    {file = "iniconfig-2.0.0.tar.gz", hash = "sha256:2d91e135bf72d31a410b17c16da610a82cb55f6b0477d1a902134b24a455b8b3"},
+]
+
+[[package]]
+name = "packaging"
+version = "24.2"
+description = "Core utilities for Python packages"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "packaging-24.2-py3-none-any.whl", hash = "sha256:09abb1bccd265c01f4a3aa3f7a7db064b36514d2cba19a2f694fe6150451a759"},
+    {file = "packaging-24.2.tar.gz", hash = "sha256:c228a6dc5e932d346bc5739379109d49e8853dd8223571c7c5b55260edc0b97f"},
+]
+
+[[package]]
+name = "pluggy"
+version = "1.5.0"
+description = "plugin and hook calling mechanisms for python"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "pluggy-1.5.0-py3-none-any.whl", hash = "sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669"},
+    {file = "pluggy-1.5.0.tar.gz", hash = "sha256:2cffa88e94fdc978c4c574f15f9e59b7f4201d439195c3715ca9e2486f1d0cf1"},
+]
+
+[package.extras]
+dev = ["pre-commit", "tox"]
+testing = ["pytest", "pytest-benchmark"]
+
+[[package]]
+name = "pytest"
+version = "8.3.4"
+description = "pytest: simple powerful testing with Python"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "pytest-8.3.4-py3-none-any.whl", hash = "sha256:50e16d954148559c9a74109af1eaf0c945ba2d8f30f0a3d3335edde19788b6f6"},
+    {file = "pytest-8.3.4.tar.gz", hash = "sha256:965370d062bce11e73868e0335abac31b4d3de0e82f4007408d242b4f8610761"},
+]
+
+[package.dependencies]
+colorama = {version = "*", markers = "sys_platform == \"win32\""}
+exceptiongroup = {version = ">=1.0.0rc8", markers = "python_version < \"3.11\""}
+iniconfig = "*"
+packaging = "*"
+pluggy = ">=1.5,<2"
+tomli = {version = ">=1", markers = "python_version < \"3.11\""}
+
+[package.extras]
+dev = ["argcomplete", "attrs (>=19.2)", "hypothesis (>=3.56)", "mock", "pygments (>=2.7.2)", "requests", "setuptools", "xmlschema"]
+
+[[package]]
+name = "ruff"
+version = "0.8.4"
+description = "An extremely fast Python linter and code formatter, written in Rust."
+optional = false
+python-versions = ">=3.7"
+files = [
+    {file = "ruff-0.8.4-py3-none-linux_armv6l.whl", hash = "sha256:58072f0c06080276804c6a4e21a9045a706584a958e644353603d36ca1eb8a60"},
+    {file = "ruff-0.8.4-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:ffb60904651c00a1e0b8df594591770018a0f04587f7deeb3838344fe3adabac"},
+    {file = "ruff-0.8.4-py3-none-macosx_11_0_arm64.whl", hash = "sha256:6ddf5d654ac0d44389f6bf05cee4caeefc3132a64b58ea46738111d687352296"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e248b1f0fa2749edd3350a2a342b67b43a2627434c059a063418e3d375cfe643"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:bf197b98ed86e417412ee3b6c893f44c8864f816451441483253d5ff22c0e81e"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:c41319b85faa3aadd4d30cb1cffdd9ac6b89704ff79f7664b853785b48eccdf3"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:9f8402b7c4f96463f135e936d9ab77b65711fcd5d72e5d67597b543bbb43cf3f"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:e4e56b3baa9c23d324ead112a4fdf20db9a3f8f29eeabff1355114dd96014604"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:736272574e97157f7edbbb43b1d046125fce9e7d8d583d5d65d0c9bf2c15addf"},
+    {file = "ruff-0.8.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e5fe710ab6061592521f902fca7ebcb9fabd27bc7c57c764298b1c1f15fff720"},
+    {file = "ruff-0.8.4-py3-none-musllinux_1_2_aarch64.whl", hash = "sha256:13e9ec6d6b55f6da412d59953d65d66e760d583dd3c1c72bf1f26435b5bfdbae"},
+    {file = "ruff-0.8.4-py3-none-musllinux_1_2_armv7l.whl", hash = "sha256:97d9aefef725348ad77d6db98b726cfdb075a40b936c7984088804dfd38268a7"},
+    {file = "ruff-0.8.4-py3-none-musllinux_1_2_i686.whl", hash = "sha256:ab78e33325a6f5374e04c2ab924a3367d69a0da36f8c9cb6b894a62017506111"},
+    {file = "ruff-0.8.4-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:8ef06f66f4a05c3ddbc9121a8b0cecccd92c5bf3dd43b5472ffe40b8ca10f0f8"},
+    {file = "ruff-0.8.4-py3-none-win32.whl", hash = "sha256:552fb6d861320958ca5e15f28b20a3d071aa83b93caee33a87b471f99a6c0835"},
+    {file = "ruff-0.8.4-py3-none-win_amd64.whl", hash = "sha256:f21a1143776f8656d7f364bd264a9d60f01b7f52243fbe90e7670c0dfe0cf65d"},
+    {file = "ruff-0.8.4-py3-none-win_arm64.whl", hash = "sha256:9183dd615d8df50defa8b1d9a074053891ba39025cf5ae88e8bcb52edcc4bf08"},
+    {file = "ruff-0.8.4.tar.gz", hash = "sha256:0d5f89f254836799af1615798caa5f80b7f935d7a670fad66c5007928e57ace8"},
+]
+
+[[package]]
+name = "tomli"
+version = "2.2.1"
+description = "A lil' TOML parser"
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "tomli-2.2.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:678e4fa69e4575eb77d103de3df8a895e1591b48e740211bd1067378c69e8249"},
+    {file = "tomli-2.2.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:023aa114dd824ade0100497eb2318602af309e5a55595f76b626d6d9f3b7b0a6"},
+    {file = "tomli-2.2.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ece47d672db52ac607a3d9599a9d48dcb2f2f735c6c2d1f34130085bb12b112a"},
+    {file = "tomli-2.2.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:6972ca9c9cc9f0acaa56a8ca1ff51e7af152a9f87fb64623e31d5c83700080ee"},
+    {file = "tomli-2.2.1-cp311-cp311-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:c954d2250168d28797dd4e3ac5cf812a406cd5a92674ee4c8f123c889786aa8e"},
+    {file = "tomli-2.2.1-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:8dd28b3e155b80f4d54beb40a441d366adcfe740969820caf156c019fb5c7ec4"},
+    {file = "tomli-2.2.1-cp311-cp311-musllinux_1_2_i686.whl", hash = "sha256:e59e304978767a54663af13c07b3d1af22ddee3bb2fb0618ca1593e4f593a106"},
+    {file = "tomli-2.2.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:33580bccab0338d00994d7f16f4c4ec25b776af3ffaac1ed74e0b3fc95e885a8"},
+    {file = "tomli-2.2.1-cp311-cp311-win32.whl", hash = "sha256:465af0e0875402f1d226519c9904f37254b3045fc5084697cefb9bdde1ff99ff"},
+    {file = "tomli-2.2.1-cp311-cp311-win_amd64.whl", hash = "sha256:2d0f2fdd22b02c6d81637a3c95f8cd77f995846af7414c5c4b8d0545afa1bc4b"},
+    {file = "tomli-2.2.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:4a8f6e44de52d5e6c657c9fe83b562f5f4256d8ebbfe4ff922c495620a7f6cea"},
+    {file = "tomli-2.2.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:8d57ca8095a641b8237d5b079147646153d22552f1c637fd3ba7f4b0b29167a8"},
+    {file = "tomli-2.2.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:4e340144ad7ae1533cb897d406382b4b6fede8890a03738ff1683af800d54192"},
+    {file = "tomli-2.2.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:db2b95f9de79181805df90bedc5a5ab4c165e6ec3fe99f970d0e302f384ad222"},
+    {file = "tomli-2.2.1-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:40741994320b232529c802f8bc86da4e1aa9f413db394617b9a256ae0f9a7f77"},
+    {file = "tomli-2.2.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:400e720fe168c0f8521520190686ef8ef033fb19fc493da09779e592861b78c6"},
+    {file = "tomli-2.2.1-cp312-cp312-musllinux_1_2_i686.whl", hash = "sha256:02abe224de6ae62c19f090f68da4e27b10af2b93213d36cf44e6e1c5abd19fdd"},
+    {file = "tomli-2.2.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b82ebccc8c8a36f2094e969560a1b836758481f3dc360ce9a3277c65f374285e"},
+    {file = "tomli-2.2.1-cp312-cp312-win32.whl", hash = "sha256:889f80ef92701b9dbb224e49ec87c645ce5df3fa2cc548664eb8a25e03127a98"},
+    {file = "tomli-2.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:7fc04e92e1d624a4a63c76474610238576942d6b8950a2d7f908a340494e67e4"},
+    {file = "tomli-2.2.1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:f4039b9cbc3048b2416cc57ab3bda989a6fcf9b36cf8937f01a6e731b64f80d7"},
+    {file = "tomli-2.2.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:286f0ca2ffeeb5b9bd4fcc8d6c330534323ec51b2f52da063b11c502da16f30c"},
+    {file = "tomli-2.2.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:a92ef1a44547e894e2a17d24e7557a5e85a9e1d0048b0b5e7541f76c5032cb13"},
+    {file = "tomli-2.2.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9316dc65bed1684c9a98ee68759ceaed29d229e985297003e494aa825ebb0281"},
+    {file = "tomli-2.2.1-cp313-cp313-manylinux_2_5_i686.manylinux1_i686.manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:e85e99945e688e32d5a35c1ff38ed0b3f41f43fad8df0bdf79f72b2ba7bc5272"},
+    {file = "tomli-2.2.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:ac065718db92ca818f8d6141b5f66369833d4a80a9d74435a268c52bdfa73140"},
+    {file = "tomli-2.2.1-cp313-cp313-musllinux_1_2_i686.whl", hash = "sha256:d920f33822747519673ee656a4b6ac33e382eca9d331c87770faa3eef562aeb2"},
+    {file = "tomli-2.2.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:a198f10c4d1b1375d7687bc25294306e551bf1abfa4eace6650070a5c1ae2744"},
+    {file = "tomli-2.2.1-cp313-cp313-win32.whl", hash = "sha256:d3f5614314d758649ab2ab3a62d4f2004c825922f9e370b29416484086b264ec"},
+    {file = "tomli-2.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:a38aa0308e754b0e3c67e344754dff64999ff9b513e691d0e786265c93583c69"},
+    {file = "tomli-2.2.1-py3-none-any.whl", hash = "sha256:cb55c73c5f4408779d0cf3eef9f762b9c9f147a77de7b258bef0a5628adc85cc"},
+    {file = "tomli-2.2.1.tar.gz", hash = "sha256:cd45e1dc79c835ce60f7404ec8119f2eb06d38b1deba146f07ced3bbc44505ff"},
+]
+
+[metadata]
+lock-version = "2.0"
+python-versions = "^3.10"
+content-hash = "87edb472f4e7c22373d347c77e3e7e22c1c9b1cf374de0b9894f9e01448f8d3d"
+
+
