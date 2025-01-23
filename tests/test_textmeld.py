@@ -86,7 +86,7 @@ def test_generate_tree(sample_directory):
 
 def test_merge_files(sample_directory):
     """ファイル統合のテスト"""
-    meld = TextMeld()
+    meld = TextMeld([".gitignore"])
     merged = meld.merge_files(sample_directory)
     
     # 各ファイルの内容が含まれているか確認
@@ -135,3 +135,21 @@ def test_exclusion_patterns(sample_directory, exclude_patterns, expected_files):
     for file in excluded_files:
         if any(fnmatch.fnmatch(file, pattern) for pattern in exclude_patterns):
             assert f"File: {file}" not in result
+
+def test_exclude_gitignores_dir_structure():
+    """gitignoreで除外されるファイルがディレクトリ構造に含まれないことを確認"""
+    # テスト用のディレクトリ構造を作成
+    temp_dir = tempfile.mkdtemp()
+    src_dir = Path(temp_dir) / "src"
+    src_dir.mkdir()
+    (src_dir / "main.py").write_text("print('Hello')\n")
+    (src_dir / "test.py").write_text("def test_func():\n    pass\n")
+    (src_dir / ".gitignore").write_text("*.py\n")
+    
+    meld = TextMeld()
+    result = meld.process_directory(str(src_dir))
+    
+    # .gitignoreで除外されるべきファイルがディレクトリ構造に含まれていないことを確認
+    assert "main.py" not in result
+    assert "test.py" not in result
+    assert ".gitignore" in result

@@ -20,7 +20,7 @@ class TextMeld:
         self,
         exclude_patterns: typ.Optional[list[str]] = None
     ):
-        default_ignore_patterns = [".git/", ".gitignore", "__pycache__/"]
+        default_ignore_patterns = [".git/", "__pycache__/"]
         self.exclude_patterns = exclude_patterns or []
         self.exclude_patterns.extend(default_ignore_patterns)
 
@@ -60,6 +60,7 @@ class TextMeld:
             # If item is directory, item is appended with '/'
             if os.path.isdir(full_path):
                 item += "/"
+
             # check if file should be excluded
             if self.should_exclude_from_content(item):
                 continue
