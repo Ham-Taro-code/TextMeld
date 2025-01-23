@@ -17,7 +17,11 @@ pytest = "^8.3.4"
 [tool.poetry.scripts]
 textmeld = "textmeld:main"
 
+[tool.poetry-dynamic-versioning]
+enable = true
+format = "{base}"
+
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core", "poetry-dynamic-versioning"]
+build-backend = "poetry_dynamic_versioning.backend"
 
