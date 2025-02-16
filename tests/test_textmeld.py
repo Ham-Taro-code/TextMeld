@@ -88,13 +88,13 @@ def test_merge_files(sample_directory):
     """ファイル統合のテスト"""
     meld = TextMeld([".gitignore"])
     merged = meld.merge_files(sample_directory)
-    
+
     # 各ファイルの内容が含まれているか確認
     assert "File: main.py" in merged
     assert "print('Hello')" in merged
     assert "File: test.py" in merged
     assert "def test_func():" in merged
-    assert "File: helper.py" in merged
+    assert "File: utils/helper.py" in merged
     assert "def helper():" in merged
     
     # 除外されるべきファイルが含まれていないか確認
@@ -114,11 +114,11 @@ def test_process_directory(sample_directory):
     assert "Merged Content:" in result
     assert "File: main.py" in result
     assert "File: test.py" in result
-    assert "File: helper.py" in result
+    assert "File: utils/helper.py" in result
 
 @pytest.mark.parametrize("exclude_patterns,expected_files", [
     (["*.py"], []),  # 全てのPythonファイルを除外
-    (["test*"], ["main.py", "helper.py"]),  # testで始まるファイルを除外
+    (["test*"], ["main.py", "utils/helper.py"]),  # testで始まるファイルを除外
     (["utils/"], ["main.py", "test.py"]),  # utilsディレクトリを除外
 ])
 def test_exclusion_patterns(sample_directory, exclude_patterns, expected_files):
@@ -153,3 +153,32 @@ def test_exclude_gitignores_dir_structure():
     assert "main.py" not in result
     assert "test.py" not in result
     assert ".gitignore" in result
+
+
+def test_exclude_subdirectory():
+    # subdirectoryをexcludeする
+    temp_dir = tempfile.mkdtemp()
+    src_dir = Path(temp_dir) / "src"
+    src_dir.mkdir()
+    (src_dir / "main.py").write_text("print('Hello')\n")
+    (src_dir / "test.py").write_text("def test_func():\n    pass\n")
+    (src_dir / "sub").mkdir()
+    sub_dir = src_dir / "sub" / "sub"
+    sub_dir.mkdir()
+    (sub_dir / "sub.py").write_text("def sub_func():\n    pass\n")
+
+    include_sub_dir = src_dir / "sub" / "include_sub"
+    include_sub_dir.mkdir()
+    (include_sub_dir / "include_sub.py").write_text("def include_sub_func():\n    pass\n")
+
+    meld = TextMeld(exclude_patterns=["sub/sub/*"])
+    result = meld.process_directory(str(src_dir))
+
+
+    # subdirectoryがexcludeされていることを確認
+    assert "def sub_func()" not in result
+
+    # include_subdirectoryが含まれていることを確認
+    assert "def include_sub_func()" in result
+    
+
